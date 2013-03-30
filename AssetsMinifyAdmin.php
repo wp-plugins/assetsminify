@@ -45,6 +45,7 @@ class AssetsMinifyAdmin {
 		$this->tpl( "settings.phtml" );
 	}
 }
-add_action( 'plugins_loaded', function() {
+function amPluginsLoaded() {
 	new AssetsMinifyAdmin;	
-});
+}
+add_action( 'plugins_loaded', 'amPluginsLoaded' );

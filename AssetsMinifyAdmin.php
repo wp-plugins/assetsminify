@@ -13,11 +13,8 @@ class AssetsMinifyAdmin {
 		add_action('admin_menu', array( $this, 'menu') );
 
 		if ( isset($_GET['empty_cache']) ) {
-			update_option( 'as_minify_head_css_mtime', 'toUpdate' );
-			update_option( 'as_minify_head_sass_mtime', 'toUpdate' );
-			update_option( 'as_minify_head_less_mtime', 'toUpdate' );
-			update_option( 'as_minify_head_mtime', 'toUpdate' );
-			update_option( 'as_minify_foot_mtime', 'toUpdate' );
+			$uploadsDir = wp_upload_dir();
+			array_map('unlink', glob($uploadsDir['basedir'] . '/am_assets/' . "*.*"));
 			wp_redirect( admin_url( str_replace(array('/wp-admin/', '&empty_cache'), '', $_SERVER['REQUEST_URI']) ) );
 		}
 	}
@@ -46,6 +43,6 @@ class AssetsMinifyAdmin {
 	}
 }
 function amPluginsLoaded() {
-	new AssetsMinifyAdmin;	
+	return new AssetsMinifyAdmin;	
 }
 add_action( 'plugins_loaded', 'amPluginsLoaded' );

@@ -102,6 +102,13 @@ class AssetsMinifyInit {
 	}
 
 	/**
+	 * Cleans the path of the site from the filepath
+	 */
+	public function cleanPath( $filepath ) {
+		return str_replace( get_site_url(), "", $filepath );
+	}
+
+	/**
 	 * Takes all the scripts enqueued to the theme and removes them from the queue
 	 */
 	public function extractScripts() {
@@ -110,10 +117,14 @@ class AssetsMinifyInit {
 		if ( empty($wp_scripts->queue) )
 			return;
 
-		foreach( $wp_scripts->queue as $handle ) {
+		// Trigger dependency resolution
+		$wp_scripts->all_deps($wp_scripts->queue);
 
+		foreach( $wp_scripts->to_do as $key => $handle ) {
 			//Removes absolute part of the path if it's specified in the src
-			$script = str_replace( "http://{$_SERVER['SERVER_NAME']}", "", $wp_scripts->registered[$handle]->src );
+			$script = $this->cleanPath($wp_scripts->registered[$handle]->src);
+
+			$script = str_replace( "/wp-includes/", str_replace( getcwd(), '', ABSPATH ) . "wp-includes/", $script );
 
 			//Doesn't manage other domains included scripts
 			if ( strpos($script, "http") === 0 || strpos($script, "//") === 0 )
@@ -128,7 +139,7 @@ class AssetsMinifyInit {
 			//Saves the source filename for every script enqueued
 			$filepath = getcwd() . $script;
 
-			if ( !file_exists($filepath) )
+			if ( empty($script) || !is_file($filepath) )
 				continue;
 
 			$this->scripts[ $where ][ $handle ] = $filepath;
@@ -138,8 +149,10 @@ class AssetsMinifyInit {
 			//responsible to include all the scripts except other domains ones.
 			$wp_scripts->dequeue( $handle );
 
+			//Move the handle to the done array.
+			$wp_scripts->done[] = $handle;
+			unset($wp_scripts->to_do[$key]);
 		}
-
 	}
 
 	/**
@@ -151,10 +164,12 @@ class AssetsMinifyInit {
 		if ( empty($wp_styles->queue) )
 			return;
 
-		foreach( $wp_styles->queue as $handle ) {
+		// Trigger dependency resolution
+		$wp_styles->all_deps($wp_styles->queue);
 
+		foreach( $wp_styles->to_do as $key => $handle ) {
 			//Removes absolute part of the path if it's specified in the src
-			$style = str_replace( "http://{$_SERVER['SERVER_NAME']}", "", $wp_styles->registered[$handle]->src );
+			$style = $this->cleanPath($wp_styles->registered[$handle]->src);
 
 			//Doesn't manage other domains included stylesheets
 			if ( strpos($style, "http") === 0 || strpos($style, "//") === 0 )
@@ -192,6 +207,9 @@ class AssetsMinifyInit {
 			//responsible to include all the stylesheets except other domains ones.
 			$wp_styles->dequeue( $handle );
 
+			//Move the handle to the done array.
+			$wp_styles->done[] = $handle;
+			unset($wp_styles->to_do[$key]);
 		}
 	}
 

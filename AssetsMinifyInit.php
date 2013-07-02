@@ -10,6 +10,7 @@ use Assetic\Filter\JSMinFilter;
 use Assetic\Filter\CssMinFilter;
 use Assetic\Filter\CssRewriteFilter;
 use Assetic\Filter\ScssphpFilter;
+use Assetic\Filter\CoffeeScriptFilter;
 use Assetic\Filter\CompassFilter;
 use Assetic\Filter\LessphpFilter;
 use Assetic\Cache\FilesystemCache;
@@ -22,6 +23,8 @@ class AssetsMinifyInit {
 
 	public $js;
 	public $css;
+
+	protected $exclusions;
 
 	protected $assetsPath;
 	protected $assetsUrl;
@@ -40,6 +43,9 @@ class AssetsMinifyInit {
 
 	protected $scripts      = array( 'header' => array(), 'footer' => array() );
 	protected $mTimes       = array( 'header' => array(), 'footer' => array() );
+
+	protected $coffee       = array( 'header' => array(), 'footer' => array() );
+	protected $mTimesCoffee = array( 'header' => array(), 'footer' => array() );
 
 	protected $jsMin        = 'JSMin';
 	protected $cssMin       = 'CssMin';
@@ -81,9 +87,13 @@ class AssetsMinifyInit {
 		//Manager for Filesystem management
 		$this->cache = new FilesystemCache( $this->assetsPath );
 
+		$this->exclusions = preg_split('/[ ]*,[ ]*/', trim(get_option('am_files_to_exclude')));
+
 		//Detects all js and css added to WordPress and removes their inclusion
-		add_action( 'wp_print_styles',  array( $this, 'extractStyles' ) );
-		add_action( 'wp_print_scripts', array( $this, 'extractScripts' ) );
+		if( get_option('am_compress_styles', 1) )
+			add_action( 'wp_print_styles',  array( $this, 'extractStyles' ) );
+		if( get_option('am_compress_scripts', 1) )
+			add_action( 'wp_print_scripts', array( $this, 'extractScripts' ) );
 
 		//Inclusion of scripts in <head> and before </body>
 		add_action( 'wp_head',   array( $this, 'headerServe' ) );
@@ -102,10 +112,45 @@ class AssetsMinifyInit {
 	}
 
 	/**
-	 * Cleans the path of the site from the filepath
+	 * Guess absolute path from file URL
 	 */
-	public function cleanPath( $filepath ) {
-		return str_replace( get_site_url(), "", $filepath );
+	public function guessPath( $file_url ) {
+
+		$components = parse_url($file_url);
+
+		// Check we have at least a path
+		if( !isset($components['path']) )
+			return false;
+
+		$file_path = false;
+
+		// Script is enqueued from a plugin
+		if( strpos($file_url, WP_PLUGIN_URL) !== false )
+			$file_path = WP_PLUGIN_DIR . str_replace(WP_PLUGIN_URL, '', $file_url);
+
+		// Script is enqueued from a theme
+		if( strpos($file_url, WP_CONTENT_URL) !== false )
+			$file_path = WP_CONTENT_DIR . str_replace(WP_CONTENT_URL, '', $file_url);
+
+		// Script is enqueued from wordpress
+		if( strpos($file_url,  WPINC) !== false )
+			$file_path = untrailingslashit(ABSPATH) . $file_url;
+
+		return $file_path;
+	}
+
+	/**
+	 * Checks if the file is within the list of "to exclude" resources
+	 *
+	 * @param string $path The file path
+	 * @return boolean Whether the file is to exclude or not
+	 */
+	protected function isFileExcluded( $path ) {
+		$filename = explode('/', $path);
+		if ( in_array($filename[ count($filename) - 1 ], $this->exclusions) )
+			return true;
+
+		return false;
 	}
 
 	/**
@@ -121,13 +166,14 @@ class AssetsMinifyInit {
 		$wp_scripts->all_deps($wp_scripts->queue);
 
 		foreach( $wp_scripts->to_do as $key => $handle ) {
-			//Removes absolute part of the path if it's specified in the src
-			$script = $this->cleanPath($wp_scripts->registered[$handle]->src);
 
-			$script = str_replace( "/wp-includes/", str_replace( ABSPATH, '', ABSPATH ) . "wp-includes/", $script );
+			if ( $this->isFileExcluded($wp_scripts->registered[$handle]->src) )
+				continue;
 
-			//Doesn't manage other domains included scripts
-			if ( strpos($script, "http") === 0 || strpos($script, "//") === 0 )
+			$script_path = $this->guessPath($wp_scripts->registered[$handle]->src);
+
+			// Script didn't match any case (plugin, theme or wordpress locations)
+			if( $script_path === false )
 				continue;
 
 			$where = 'footer';
@@ -136,14 +182,19 @@ class AssetsMinifyInit {
 			if ( empty($wp_scripts->registered[$handle]->extra) )
 				$where = 'header';
 
-			//Saves the source filename for every script enqueued
-			$filepath = ABSPATH . $script;
-
-			if ( empty($script) || !is_file($filepath) )
+			if ( empty($script_path) || !is_file($script_path) )
 				continue;
 
-			$this->scripts[ $where ][ $handle ] = $filepath;
-			$this->mTimes[ $where ][ $handle ]  = filemtime( $this->scripts[ $where ][ $handle ] );
+			//Separation between css-frameworks stylesheets and .css stylesheets
+			$ext = substr( $script_path, -7 );
+
+			if ( $ext === '.coffee' ) {
+				$this->coffee[ $where ][ $handle ] = $script_path;
+				$this->mTimesCoffee[ $where ][ $handle ]  = filemtime( $this->coffee[ $where ][ $handle ] );
+			} else {
+				$this->scripts[ $where ][ $handle ] = $script_path;
+				$this->mTimes[ $where ][ $handle ]  = filemtime( $this->scripts[ $where ][ $handle ] );
+			}
 
 			//Removes scripts from the queue so this plugin will be
 			//responsible to include all the scripts except other domains ones.
@@ -153,6 +204,7 @@ class AssetsMinifyInit {
 			$wp_scripts->done[] = $handle;
 			unset($wp_scripts->to_do[$key]);
 		}
+
 	}
 
 	/**
@@ -168,38 +220,30 @@ class AssetsMinifyInit {
 		$wp_styles->all_deps($wp_styles->queue);
 
 		foreach( $wp_styles->to_do as $key => $handle ) {
-			//Removes absolute part of the path if it's specified in the src
-			$style = $this->cleanPath($wp_styles->registered[$handle]->src);
 
-			//Doesn't manage other domains included stylesheets
-			if ( strpos($style, "http") === 0 || strpos($style, "//") === 0 )
+			if ( $this->isFileExcluded($wp_styles->registered[$handle]->src) )
+				continue;
+
+			//Removes absolute part of the path if it's specified in the src
+			$style_path = $this->guessPath($wp_styles->registered[$handle]->src);
+
+			// Script didn't match any case (plugin, theme or wordpress locations)
+			if( $style_path == false )
+				continue;
+
+			if ( !file_exists($style_path) )
 				continue;
 
 			//Separation between css-frameworks stylesheets and .css stylesheets
-			$ext = substr( $style, -5 );
+			$ext = substr( $style_path, -5 );
 			if ( in_array( $ext, array('.sass', '.scss') ) ) {
-				$filepath = ABSPATH . $style;
-
-				if ( !file_exists($filepath) )
-					continue;
-
-				$this->sass[ $handle ]       = $filepath;
+				$this->sass[ $handle ]       = $style_path;
 				$this->mTimesSass[ $handle ] = filemtime($this->sass[ $handle ]);
 			} elseif ( $ext == '.less' ) {
-				$filepath = ABSPATH . $style;
-
-				if ( !file_exists($filepath) )
-					continue;
-
-				$this->less[ $handle ]       = $filepath;
+				$this->less[ $handle ]       = $style_path;
 				$this->mTimesLess[ $handle ] = filemtime($this->less[ $handle ]);
 			} else {
-				$filepath = ABSPATH . $style;
-
-				if ( !file_exists($filepath) )
-					continue;
-
-				$this->styles[ $handle ]       = $filepath;
+				$this->styles[ $handle ]       = $style_path;
 				$this->mTimesStyles[ $handle ] = filemtime($this->styles[ $handle ]);
 			}
 
@@ -239,6 +283,9 @@ class AssetsMinifyInit {
 			$this->dumpCss( "head-{$mtime}.css" );
 		}
 
+		//Manages the scripts from CoffeeScript to be printed in the header
+		$this->generateCoffee('header');
+
 		//Manages the scripts to be printed in the header
 		$this->headerServeScripts();
 
@@ -251,7 +298,7 @@ class AssetsMinifyInit {
 		if ( empty($this->sass) )
 			return false;
 
-		$mtime = md5(implode('&', $this->mTimesSass));
+		$mtime = md5(implode('&', $this->mTimesSass) . implode('&', $this->sass));
 
 		//If SASS stylesheets have been updated -> compass compile
 		if ( !$this->cache->has( "sass-{$mtime}.css" ) ) {
@@ -276,7 +323,6 @@ class AssetsMinifyInit {
 		//Adds SASS compiled stylesheet to normal css queue
 		$this->styles['sass-am-generated']       = $this->assetsPath . "sass-{$mtime}.css";
 		$this->mTimesStyles['sass-am-generated'] = filemtime($this->styles['sass-am-generated']);
-
 	}
 
 	/**
@@ -286,7 +332,7 @@ class AssetsMinifyInit {
 		if ( empty($this->less) )
 			return false;
 
-		$mtime = md5(implode('&', $this->mTimesLess));
+		$mtime = md5(implode('&', $this->mTimesLess) . implode('&', $this->less));
 
 		//If LESS stylesheets have been updated compile them
 		if ( !$this->cache->has( "less-{$mtime}.css" )  ) {
@@ -300,7 +346,6 @@ class AssetsMinifyInit {
 		//Adds LESS compiled stylesheet to normal css queue
 		$this->styles['less-am-generated']       = $this->assetsPath . "less-{$mtime}.css";
 		$this->mTimesStyles['less-am-generated'] = filemtime($this->styles['less-am-generated']);
-
 	}
 
 	/**
@@ -310,7 +355,7 @@ class AssetsMinifyInit {
 		if ( empty($this->styles) )
 			return false;
 
-		$mtime = md5(implode('&', $this->mTimesStyles));
+		$mtime = md5(implode('&', $this->mTimesStyles) . implode('&', $this->styles));
 
 		//If CSS stylesheets have been updated compile and save them 
 		if ( !$this->cache->has( "styles-{$mtime}.css" ) )
@@ -319,7 +364,28 @@ class AssetsMinifyInit {
 		//Adds CSS compiled stylesheet to normal css queue
 		$this->styles       = array( 'styles-am-generated' => $this->assetsPath . "styles-{$mtime}.css");
 		$this->mTimesStyles = array( 'styles-am-generated' => filemtime($this->styles['styles-am-generated']) );
+	}
 
+	/**
+	 * Returns coffeescript inclusions for JS (if provided)
+	 */
+	public function generateCoffee( $type ) {
+		if ( empty($this->coffee[$type]) )
+			return false;
+
+		$mtime = md5(implode('&', $this->mTimesCoffee[$type]) . implode('&', $this->coffee[$type]) );
+
+		//Saves the asseticized header scripts
+		if ( !$this->cache->has( "{$type}-cs-{$mtime}.js" ) ) {
+			$this->js->getFilterManager()->set('CoffeeScriptFilter', new CoffeeScriptFilter( get_option('am_coffeescript_path', '/usr/bin/coffee') ));
+			$this->cache->set( "{$type}-cs-{$mtime}.js", $this->js->createAsset( $this->coffee[$type], array($this->jsMin, 'CoffeeScriptFilter') )->dump() );
+		}
+
+
+		//Adds Coffeescript compiled stylesheet to normal js queue
+		$script = $this->assetsPath . "{$type}-cs-{$mtime}.js";
+		$this->scripts[$type][]= $script;
+		$this->mTimes[$type][]= filemtime($script);
 	}
 
 	/**
@@ -329,7 +395,7 @@ class AssetsMinifyInit {
 		if ( empty($this->scripts['header']) )
 			return false;
 
-		$mtime = md5(implode('&', $this->mTimes['header']));
+		$mtime = md5(implode('&', $this->mTimes['header']) . implode('&', $this->scripts['header']) );
 
 		//Saves the asseticized header scripts
 		if ( !$this->cache->has( "head-{$mtime}.js" ) )
@@ -344,10 +410,14 @@ class AssetsMinifyInit {
 	 * Returns footer's inclusion for JS (if provided)
 	 */
 	public function footerServe() {
+
+		//Manages the scripts from CoffeeScript to be printed in the footer
+		$this->generateCoffee('footer');
+
 		if ( empty($this->scripts['footer']) )
 			return false;
 
-		$mtime = md5(implode('&', $this->mTimes['footer']));
+		$mtime = md5(implode('&', $this->mTimes['footer']) . implode('&', $this->scripts['footer']));
 
 		//Saves the asseticized footer scripts
 		if ( !$this->cache->has( "foot-{$mtime}.js" ) )

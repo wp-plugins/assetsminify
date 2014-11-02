@@ -128,14 +128,19 @@ class AssetsMinifyInit {
 			return false;
 
 		$file_path = false;
+		$wp_plugin_url = plugins_url();
+		$wp_content_url = content_url();
 
 		// Script is enqueued from a plugin
-		if( strpos($file_url, WP_PLUGIN_URL) !== false )
-			$file_path = WP_PLUGIN_DIR . str_replace(WP_PLUGIN_URL, '', $file_url);
+
+		$url_regex = $this->getUrlRegex($wp_plugin_url);
+		if( preg_match($url_regex, $file_url) > 0 )
+			$file_path = WP_PLUGIN_DIR . preg_replace($url_regex, '', $file_url);
 
 		// Script is enqueued from a theme
-		if( strpos($file_url, WP_CONTENT_URL) !== false )
-			$file_path = WP_CONTENT_DIR . str_replace(WP_CONTENT_URL, '', $file_url);
+		$url_regex = $this->getUrlRegex($wp_content_url);
+		if( preg_match($url_regex, $file_url) > 0 )
+			$file_path = WP_CONTENT_DIR . preg_replace($url_regex, '', $file_url);
 
 		// Script is enqueued from wordpress
 		if( strpos($file_url,  WPINC) !== false )
@@ -143,6 +148,18 @@ class AssetsMinifyInit {
 
 		return $file_path;
 	}
+	
+	/**
+	 * Returns Regular Expression string to match an URL.
+	 *
+	 * @param string $url The URL to be matched.
+	 * @return string The regular expression matching the URL.
+	 */
+	protected function getUrlRegex( $url ) {
+		$regex  = '@^' . str_replace( 'http\://','https?\:\/\/', preg_quote( $url )) . '@';
+		return $regex;
+	}
+	
 
 	/**
 	 * Checks if the file is within the list of "to exclude" resources
@@ -184,7 +201,7 @@ class AssetsMinifyInit {
 			$where = 'footer';
 			//Unfortunately not every WP plugin developer is a JS ninja
 			//So... let's put it in the header.
-			if ( empty($wp_scripts->registered[$handle]->extra) )
+			if ( empty($wp_scripts->registered[$handle]->extra) && empty($wp_scripts->registered[$handle]->args) )
 				$where = 'header';
 
 			if ( empty($script_path) || !is_file($script_path) )

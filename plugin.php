@@ -8,6 +8,5 @@
  * Version: 2.0.2
  * Author URI: http://www.artera.it
  */
-$path = dirname(__FILE__);
-require $path . '/vendor/autoload.php';
+require dirname(__FILE__) . '/vendor/autoload.php';
 AssetsMinify::getInstance();

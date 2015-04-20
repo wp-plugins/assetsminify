@@ -5,8 +5,9 @@
  * Description: WordPress plugin to minify JS and CSS assets.
  * Author: Alessandro Carbone
  * Contributors: pputzer
- * Version: 2.0.3
+ * Version: 2.0.2
  * Author URI: http://www.artera.it
  */
-require dirname(__FILE__) . '/vendor/autoload.php';
+$path = dirname(__FILE__);
+require $path . '/vendor/autoload.php';
 AssetsMinify::getInstance();
